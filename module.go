@@ -273,6 +273,11 @@ func (s *nmeaDeviceDiscoveryDevicelist) Readings(ctx context.Context, extra map[
 // keyed by that identity.
 func (s *nmeaDeviceDiscoveryDevicelist) liveDevices(ctx context.Context) (map[string]mergedDevice, error) {
 	raw, err := s.allPgn.Readings(ctx, map[string]interface{}{"pgns": readPGNs})
+	if isNilReadingsError(err) {
+		// None of readPGNs has been heard yet, as in the first minute after a
+		// viamboat restart: an empty history, not a failure.
+		raw, err = map[string]interface{}{}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Reading from all-pgn-component: %w", err)
 	}
@@ -351,6 +356,15 @@ func hasIdentityEntry(entries map[int]map[string]interface{}) bool {
 		}
 	}
 	return false
+}
+
+// nilReadingsMsg is the tail of the error viam-server returns when a sensor's
+// readings are empty; an empty map arrives over gRPC as nil, which the sensor
+// server rejects. RDK exports no sentinel, so match its message.
+var nilReadingsMsg = "Readings should not return nil readings"
+
+func isNilReadingsError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), nilReadingsMsg)
 }
 
 // parseTimestamp reads an all-pgn entry's timestamp. The raw string is
