@@ -4,7 +4,7 @@ Inventories the devices on an NMEA 2000 network. The module watches the device-i
 
 It is an analyzer/inventory tool for chart plotters, sensors, gateways, and other nodes on the bus: query it every few minutes to see what is on the network and when each device was first and last heard from. It remembers devices across restarts in the module's data directory, so the list is everything the boat has ever had on the bus, not just what has spoken since the last power-up.
 
-The module holds no bus connection of its own. It reads through a [viamboat](https://github.com/erh/viamboat) `boat-all-pgn` sensor configured on the same machine, which must be connected to the NMEA 2000 network.
+The module holds no bus connection of its own. It reads through a [viamboat](https://github.com/viam-labs/viamboat) `boat-all-pgn` sensor configured on the same machine, which must be connected to the NMEA 2000 network.
 
 ## Discovering devices already on the bus
 
