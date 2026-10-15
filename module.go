@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go.viam.com/rdk/components/generic"
 	sensor "go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -35,6 +36,10 @@ type Config struct {
 	// Persist keeps a JSON file under VIAM_MODULE_DATA so first_seen survives
 	// restarts and devices that left the bus stay listed. On by default.
 	Persist *bool `json:"persist,omitempty"`
+	// SenderComponent optionally names a viamboat sender generic component.
+	// With it, the "discover" command broadcasts ISO Requests that make the
+	// devices already on the bus announce themselves again.
+	SenderComponent string `json:"sender-component,omitempty"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -46,7 +51,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.AllPGNComponent == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "all-pgn-component")
 	}
-	return []string{cfg.AllPGNComponent}, nil, nil
+	deps := []string{cfg.AllPGNComponent}
+	if cfg.SenderComponent != "" {
+		deps = append(deps, cfg.SenderComponent)
+	}
+	return deps, nil, nil
 }
 
 type nmeaDeviceDiscoveryDevicelist struct {
@@ -69,6 +78,16 @@ type nmeaDeviceDiscoveryDevicelist struct {
 	state     *persistedState
 	statePath string
 
+	// sender is the viamboat sender the "discover" command transmits ISO
+	// Requests through; nil when sender-component is not configured.
+	// discoverMu serializes discover calls and guards lastDiscover, which
+	// enforces discoverMinInterval. discoverGap spaces the requests of one
+	// discover call (zero in tests).
+	sender       resource.Resource
+	discoverMu   sync.Mutex
+	lastDiscover time.Time
+	discoverGap  time.Duration
+
 	cancelCtx  context.Context
 	cancelFunc func()
 }
@@ -89,16 +108,26 @@ func NewDevicelist(ctx context.Context, deps resource.Dependencies, name resourc
 		return nil, fmt.Errorf("all-pgn-component %q not found in dependencies: %w", conf.AllPGNComponent, err)
 	}
 
+	var sender resource.Resource
+	if conf.SenderComponent != "" {
+		sender, err = generic.FromProvider(deps, conf.SenderComponent)
+		if err != nil {
+			return nil, fmt.Errorf("sender-component %q not found in dependencies: %w", conf.SenderComponent, err)
+		}
+	}
+
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
 	s := &nmeaDeviceDiscoveryDevicelist{
-		name:       name,
-		logger:     logger,
-		cfg:        conf,
-		allPgn:     allPgn,
-		state:      newState(),
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
+		name:        name,
+		logger:      logger,
+		cfg:         conf,
+		allPgn:      allPgn,
+		state:       newState(),
+		sender:      sender,
+		discoverGap: discoverRequestGap,
+		cancelCtx:   cancelCtx,
+		cancelFunc:  cancelFunc,
 	}
 
 	if s.persist() {
@@ -510,11 +539,16 @@ func deviceDisplayKey(identity string, device map[string]interface{}) string {
 //	                                         reading key (or "identity")
 //	{"command": "reset"}                     forget every remembered device
 //	{"command": "status"}                    persistence settings and counts
+//	{"command": "discover"}                  ask every device on the bus to
+//	                                         announce itself (see discover.go)
 func (s *nmeaDeviceDiscoveryDevicelist) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	command, _ := cmd["command"].(string)
 	switch command {
 	case "", "devices":
 		return s.Readings(ctx, nil)
+
+	case "discover":
+		return s.discover(ctx, cmd)
 
 	case "forget":
 		s.mu.Lock()
@@ -567,6 +601,7 @@ func (s *nmeaDeviceDiscoveryDevicelist) DoCommand(ctx context.Context, cmd map[s
 			"persist":            s.persist(),
 			"persist_path":       s.statePath,
 			"remembered_devices": n,
+			"sender_component":   s.senderName(),
 		}, nil
 	}
 	return nil, fmt.Errorf("unknown command %q", command)

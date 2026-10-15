@@ -38,7 +38,11 @@ This model holds no bus connection of its own; it reads through a
 [viamboat](https://github.com/erh/viamboat) `boat-all-pgn` sensor on the same
 machine, which accumulates the bus history. Inventory completeness is
 therefore passive: devices appear once they claim an address or answer
-requests on the bus. Query cadence of every few minutes is appropriate.
+requests on the bus. Devices send their identity only at power-up or when
+asked, so a device that was already on the bus when viamboat started is
+missing until something asks it; configure a `sender-component` and run
+the `discover` command (below) to ask. Query cadence of every few minutes
+is appropriate.
 
 ## Configuration
 
@@ -47,7 +51,8 @@ The following attribute template can be used to configure this model:
 ```json
 {
   "all-pgn-component": <string>,
-  "persist": <boolean>
+  "persist": <boolean>,
+  "sender-component": <string>
 }
 ```
 
@@ -59,6 +64,7 @@ The following attributes are available for this model:
 |---------------------|---------|-----------|-----------------------------------------------------------------------------|
 | `all-pgn-component` | string  | Required  | Name of the viamboat `boat-all-pgn` sensor component to read the bus through |
 | `persist`           | boolean | Optional  | Default `true`: remember devices in `$VIAM_MODULE_DATA/<component name>-devices.json` so `first_seen` and offline devices survive restarts. Set `false` to report only what the current all-pgn history holds. |
+| `sender-component`  | string  | Optional  | Name of a viamboat `sender` generic component on the same bus. Required for the `discover` command; without it, `discover` returns an error and everything else works as before. |
 
 ### Example Configuration
 
@@ -146,4 +152,45 @@ since a bus address is not an identity.
 | `{"command": "devices"}` | | Same as Readings. |
 | `{"command": "forget", "device": "<reading key>"}` | or `"identity"` | Drop one remembered device (for example after physically removing it). It reappears, with a new `first_seen`, if it is heard again. |
 | `{"command": "reset"}` | | Forget every remembered device and delete the state file. |
-| `{"command": "status"}` | | Effective settings, state file path, number of remembered devices. |
+| `{"command": "status"}` | | Effective settings, state file path, number of remembered devices, configured `sender_component`. |
+| `{"command": "discover"}` | optional `"pgns"`: a subset of `[60928, 126996, 126998]` | Ask every device on the bus to announce itself (see below). Needs `sender-component`. Returns `{"requested": [...]}`. |
+
+### Discovering devices already on the bus
+
+NMEA 2000 devices send their address claim (60928), product information
+(126996) and configuration information (126998) when they power up, and
+after that only when asked. A device that was already running when viamboat
+started is therefore missing from the inventory, or listed without its model
+name, until something on the bus asks it to identify itself.
+
+`discover` does the asking. Through the viamboat `sender` named by
+`sender-component`, it broadcasts an ISO Request (PGN 59904, destination 255)
+for each identity PGN: the address claim first, then, half a second later,
+product and configuration information. Every device on the bus replies
+within a second or two. The replies land in the all-pgn history and appear in
+the next reading; `discover` returns as soon as the requests are sent and
+does not wait for them.
+
+```json
+{"command": "discover"}
+{"command": "discover", "pgns": [60928]}
+```
+
+Each request it sends is equivalent to this `sender` DoCommand:
+
+```json
+{"pgn": 59904, "dst": 255, "priority": 6, "fields": {"PGN": 60928}}
+```
+
+Things to know:
+
+- Every device on the bus answers every request, and product information is
+  a multi-frame reply, so `discover` is refused if it ran less than 30 seconds
+  ago. Run it after a restart or when the inventory looks incomplete, not on
+  a schedule.
+- It cannot refresh the sender's own device. viamboat drops the frames it
+  transmits itself, so the sender's replies never reach the all-pgn history.
+- The sender must have an address. A sender configured with a
+  `unique_number` claims one first; until the claim settles, `discover`
+  fails with the sender's "address not yet claimed" error and can be retried
+  right away.

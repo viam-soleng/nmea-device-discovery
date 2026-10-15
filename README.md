@@ -6,6 +6,18 @@ It is an analyzer/inventory tool for chart plotters, sensors, gateways, and othe
 
 The module holds no bus connection of its own. It reads through a [viamboat](https://github.com/erh/viamboat) `boat-all-pgn` sensor configured on the same machine, which must be connected to the NMEA 2000 network.
 
+## Discovering devices already on the bus
+
+Devices announce themselves (address claim, product information, configuration information) only when they power up or when asked. A device that was already running when viamboat started is missing from the inventory, or listed without its model name, until something on the bus asks it.
+
+To ask, configure a viamboat `sender` generic component on the same bus, name it in the model's `sender-component` attribute, and run:
+
+```json
+{"command": "discover"}
+```
+
+`discover` broadcasts an ISO Request (PGN 59904) for each identity PGN through the sender. Every device on the bus replies within a second or two, and the replies show up in the next reading. Because every device answers, `discover` can run at most once every 30 seconds; run it after a restart or when the inventory looks incomplete, not on a schedule. It cannot refresh the sender's own device, since viamboat drops the frames it transmits itself. See the [model documentation](viam-soleng_nmea-device-discovery_devicelist.md#discovering-devices-already-on-the-bus) for details.
+
 ## Development
 
 `go test ./...` covers the merge and persistence logic against synthetic
