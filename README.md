@@ -20,8 +20,7 @@ To ask, configure a viamboat `sender` generic component on the same bus, name it
 
 ## Development
 
-`go test ./...` covers the merge and persistence logic against synthetic
-readings. To inspect the model's output for any machine without deploying:
+`go test ./...` covers the merge and persistence logic against synthetic readings. To inspect the model's output for any machine without deploying:
 
 ```sh
 viam machines part run --part <part-id> --component all-pgn --method GetReadings > dump.json
