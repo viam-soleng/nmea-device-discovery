@@ -2,10 +2,12 @@ package nmeadevicediscovery
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"go.viam.com/rdk/components/sensor"
+	"go.viam.com/rdk/data"
 	"go.viam.com/test"
 )
 
@@ -362,4 +364,63 @@ func TestHeartbeatKeepsLastSeenCurrent(t *testing.T) {
 	// The heartbeat's own fields are not part of the device.
 	_, leaked := dev["sequence_counter"]
 	test.That(t, leaked, test.ShouldBeFalse)
+}
+
+func TestEmptyInventory(t *testing.T) {
+	// Only heartbeats, as right after a viamboat restart: no device yet.
+	fake := &fakeAllPgn{readings: map[string]interface{}{
+		"126993-3": entry(126993, 3, "15 Oct 26 17:21 -0400", map[string]interface{}{"Sequence Counter": float64(1)}),
+	}}
+	s := &nmeaDeviceDiscoveryDevicelist{allPgn: fake}
+
+	// An empty map would reach viam-server as nil and be rejected, so a
+	// direct caller gets an error that points at discover.
+	_, err := s.Readings(context.Background(), nil)
+	test.That(t, err, test.ShouldEqual, errNoDevices)
+
+	// Data capture is told there is nothing to store, which it skips quietly.
+	_, err = s.Readings(context.Background(), map[string]interface{}{data.FromDMString: true})
+	test.That(t, data.IsNoCaptureToStoreError(err), test.ShouldBeTrue)
+}
+
+// emptyAllPgn fails the way all-pgn does when nothing matches the filter: its
+// empty map reaches viam-server as nil and is rejected there.
+type emptyAllPgn struct{ sensor.Sensor }
+
+func (emptyAllPgn) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
+	return nil, sensor.ErrReadingsNil("sensor", "all-pgn")
+}
+
+func TestAllPgnWithNothingMatchingIsAnEmptyHistory(t *testing.T) {
+	// The first minute after a viamboat restart: no identity PGN and no
+	// heartbeat yet.
+	s := &nmeaDeviceDiscoveryDevicelist{allPgn: emptyAllPgn{}}
+	_, err := s.Readings(context.Background(), nil)
+	test.That(t, err, test.ShouldEqual, errNoDevices)
+	_, err = s.Readings(context.Background(), map[string]interface{}{data.FromDMString: true})
+	test.That(t, data.IsNoCaptureToStoreError(err), test.ShouldBeTrue)
+
+	// Remembered devices are still listed while the history is empty.
+	s.state = newState()
+	s.state.Devices["88213-Yamaha-0-Engine Gateway"] = persistedDevice{
+		Fields:   map[string]interface{}{"unique_number": float64(88213), "manufacturer_code": "Yamaha", "model_id": "CL7 Gateway", "src": float64(50)},
+		LastSeen: "14 Oct 26 08:52 -0400",
+	}
+	got, err := s.Readings(context.Background(), nil)
+	test.That(t, err, test.ShouldBeNil)
+	_, ok := got["Yamaha CL7 Gateway [88213]"]
+	test.That(t, ok, test.ShouldBeTrue)
+}
+
+func TestOtherAllPgnErrorsStillFail(t *testing.T) {
+	s := &nmeaDeviceDiscoveryDevicelist{allPgn: failingAllPgn{}}
+	_, err := s.Readings(context.Background(), nil)
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, "Reading from all-pgn-component")
+}
+
+type failingAllPgn struct{ sensor.Sensor }
+
+func (failingAllPgn) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
+	return nil, errors.New("reader not connected")
 }
