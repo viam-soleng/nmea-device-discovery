@@ -12,6 +12,7 @@ import (
 
 	"go.viam.com/rdk/components/generic"
 	sensor "go.viam.com/rdk/components/sensor"
+	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 )
@@ -19,6 +20,7 @@ import (
 var (
 	Devicelist       = resource.NewModel("viam-soleng", "nmea-device-discovery", "devicelist")
 	errUnimplemented = errors.New("unimplemented")
+	errNoDevices     = errors.New(`no NMEA 2000 devices seen yet; devices identify themselves at power-up or when asked, so run {"command": "discover"}`)
 )
 
 func init() {
@@ -253,6 +255,15 @@ func (s *nmeaDeviceDiscoveryDevicelist) Readings(ctx context.Context, extra map[
 	devices := map[string]interface{}{}
 	for key, m := range disambiguate(merged) {
 		devices[key] = m.render()
+	}
+	if len(devices) == 0 {
+		// An empty map arrives at viam-server as nil, which the sensor server
+		// rejects. Data capture skips ErrNoCaptureToStore quietly; any other
+		// caller gets an error that says what to do.
+		if fromDM, _ := extra[data.FromDMString].(bool); fromDM {
+			return nil, data.ErrNoCaptureToStore
+		}
+		return nil, errNoDevices
 	}
 	return devices, nil
 }

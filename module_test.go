@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go.viam.com/rdk/components/sensor"
+	"go.viam.com/rdk/data"
 	"go.viam.com/test"
 )
 
@@ -362,4 +363,21 @@ func TestHeartbeatKeepsLastSeenCurrent(t *testing.T) {
 	// The heartbeat's own fields are not part of the device.
 	_, leaked := dev["sequence_counter"]
 	test.That(t, leaked, test.ShouldBeFalse)
+}
+
+func TestEmptyInventory(t *testing.T) {
+	// Only heartbeats, as right after a viamboat restart: no device yet.
+	fake := &fakeAllPgn{readings: map[string]interface{}{
+		"126993-3": entry(126993, 3, "15 Oct 26 17:21 -0400", map[string]interface{}{"Sequence Counter": float64(1)}),
+	}}
+	s := &nmeaDeviceDiscoveryDevicelist{allPgn: fake}
+
+	// An empty map would reach viam-server as nil and be rejected, so a
+	// direct caller gets an error that points at discover.
+	_, err := s.Readings(context.Background(), nil)
+	test.That(t, err, test.ShouldEqual, errNoDevices)
+
+	// Data capture is told there is nothing to store, which it skips quietly.
+	_, err = s.Readings(context.Background(), map[string]interface{}{data.FromDMString: true})
+	test.That(t, data.IsNoCaptureToStoreError(err), test.ShouldBeTrue)
 }

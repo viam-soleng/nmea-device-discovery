@@ -104,6 +104,8 @@ Fields are best-effort per device: only what that device has transmitted on the 
 
 NMEA 2000 devices send their address claim (60928), product information (126996) and configuration information (126998) when they power up, and after that only when asked. A device that was already running when viamboat started is therefore missing from the inventory, or listed without its model name, until something on the bus asks it to identify itself.
 
+While no device has identified itself and none is remembered, the inventory is empty. A reading then returns the error `no NMEA 2000 devices seen yet; ... run {"command": "discover"}` instead of an empty map, because viam-server rejects empty sensor readings. Data capture receives `data.ErrNoCaptureToStore` instead, so it skips those captures without logging errors.
+
 `discover` does the asking. Through the viamboat `sender` named by `sender-component`, it broadcasts an ISO Request (PGN 59904, destination 255) for each identity PGN: the address claim first, then, half a second later, product and configuration information. Every device on the bus replies within a second or two. The replies land in the all-pgn history and appear in the next reading; `discover` returns as soon as the requests are sent and does not wait for them.
 
 ```json

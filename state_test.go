@@ -232,9 +232,8 @@ func TestForgetAndReset(t *testing.T) {
 	res, err := s.DoCommand(context.Background(), map[string]interface{}{"command": "forget", "device": "Yamaha CL7 Gateway [88213]"})
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, res["forgotten"], test.ShouldEqual, "88213-Yamaha-0-Engine Gateway")
-	got, err = s.Readings(context.Background(), nil)
-	test.That(t, err, test.ShouldBeNil)
-	test.That(t, len(got), test.ShouldEqual, 0)
+	_, err = s.Readings(context.Background(), nil)
+	test.That(t, err, test.ShouldEqual, errNoDevices)
 
 	// Unknown key is an error, not a silent no-op.
 	_, err = s.DoCommand(context.Background(), map[string]interface{}{"command": "forget", "device": "nope"})
@@ -250,9 +249,8 @@ func TestForgetAndReset(t *testing.T) {
 	_, err = os.Stat(statePath)
 	test.That(t, os.IsNotExist(err), test.ShouldBeTrue)
 	s = newPersisting(t, &fakeAllPgn{readings: map[string]interface{}{}}, nil)
-	got, err = s.Readings(context.Background(), nil)
-	test.That(t, err, test.ShouldBeNil)
-	test.That(t, len(got), test.ShouldEqual, 0)
+	_, err = s.Readings(context.Background(), nil)
+	test.That(t, err, test.ShouldEqual, errNoDevices)
 }
 
 func TestStatusMatchesStatusCommand(t *testing.T) {
