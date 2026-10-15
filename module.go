@@ -597,7 +597,12 @@ func (s *nmeaDeviceDiscoveryDevicelist) DoCommand(ctx context.Context, cmd map[s
 		if s.state != nil {
 			n = len(s.state.Devices)
 		}
+		allPgnName := ""
+		if s.cfg != nil {
+			allPgnName = s.cfg.AllPGNComponent
+		}
 		return map[string]interface{}{
+			"all_pgn_component":  allPgnName,
 			"persist":            s.persist(),
 			"persist_path":       s.statePath,
 			"remembered_devices": n,
@@ -615,8 +620,9 @@ func (s *nmeaDeviceDiscoveryDevicelist) saveLocked() error {
 	return s.state.save(s.statePath)
 }
 
+// Status reports the same settings and counts as the "status" command.
 func (s *nmeaDeviceDiscoveryDevicelist) Status(ctx context.Context) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+	return s.DoCommand(ctx, map[string]interface{}{"command": "status"})
 }
 
 func (s *nmeaDeviceDiscoveryDevicelist) Close(context.Context) error {

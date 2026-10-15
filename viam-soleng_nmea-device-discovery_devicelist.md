@@ -97,7 +97,7 @@ Fields are best-effort per device: only what that device has transmitted on the 
 | `{"command": "devices"}` | | Same as Readings. |
 | `{"command": "forget", "device": "<reading key>"}` | or `"identity"` | Drop one remembered device (for example after physically removing it). It reappears, with a new `first_seen`, if it is heard again. |
 | `{"command": "reset"}` | | Forget every remembered device and delete the state file. |
-| `{"command": "status"}` | | Effective settings, state file path, number of remembered devices, configured `sender_component`. |
+| `{"command": "status"}` | | Effective settings: `all_pgn_component`, `sender_component`, `persist`, `persist_path`, and `remembered_devices`. `GetStatus` returns the same map. |
 | `{"command": "discover"}` | optional `"pgns"`: a subset of `[60928, 126996, 126998]` | Ask every device on the bus to announce itself (see below). Needs `sender-component`. Returns `{"requested": [...]}`. |
 
 ### Discovering devices already on the bus

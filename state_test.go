@@ -254,3 +254,22 @@ func TestForgetAndReset(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, len(got), test.ShouldEqual, 0)
 }
+
+func TestStatusMatchesStatusCommand(t *testing.T) {
+	cfg := &Config{AllPGNComponent: "all-pgn", SenderComponent: "sender", Persist: boolPtr(false)}
+	s := &nmeaDeviceDiscoveryDevicelist{allPgn: &fakeAllPgn{readings: map[string]interface{}{}}, cfg: cfg, state: newState()}
+
+	got, err := s.Status(context.Background())
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, got, test.ShouldResemble, map[string]interface{}{
+		"all_pgn_component":  "all-pgn",
+		"persist":            false,
+		"persist_path":       "",
+		"remembered_devices": 0,
+		"sender_component":   "sender",
+	})
+
+	cmd, err := s.DoCommand(context.Background(), map[string]interface{}{"command": "status"})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, got, test.ShouldResemble, cmd)
+}
