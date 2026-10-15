@@ -3,20 +3,38 @@
 A sensor that reports an inventory of the devices on an NMEA 2000 network.
 Each reading returns one entry per physical device, merging that device's ISO
 Address Claim (PGN 60928), Product Information (PGN 126996), and Configuration
-Information (PGN 126998) into a single object.
+Information (PGN 126998) into a single object. Heartbeat (PGN 126993) is read
+as well, only for its timestamp.
 
 Entries are keyed by a human-readable device label,
 `<manufacturer> <model> [<unique number>]` (for example
-`Simrad NSS4-12 iGPS [1589637]`). Devices are identified by their stable
-identity (unique number + manufacturer from the address claim), not by bus
-address — NMEA 2000 addresses can move when devices contend, and a device
-that changed address is reported once, at its newest address. Entries are
-never pruned: use the `last_seen` timestamp to decide what counts as stale
-for your application. A device heard from only partially (for example,
-product info without an address claim) is keyed by its source address as
-`... [src-<n>]` until its claim is seen.
+`Simrad NSS4-12 iGPS [1589637]`). Devices are identified by their ISO NAME
+from the address claim (unique number, manufacturer, device instance and
+device function), not by bus address — NMEA 2000 addresses can move when
+devices contend, and a device that changed address is reported once, at its
+newest address. A device with a non-zero device instance carries it in its
+label as `... #<device instance>`, so the two halves of a dual gateway are
+`... [340545]` and `... [340545] #1` whether or not both are currently on
+the bus. Devices that still share a label and differ only by device
+function (a plotter's virtual nodes, before their product info is seen) get
+`... (<device function>)`. Entries are never pruned:
+use the `last_seen` timestamp to decide what counts as stale for your
+application. A device heard from only partially (for example, product info
+without an address claim) is keyed by its source address as `... [src-<n>]`
+until its claim is seen.
 
-This model keeps no bus connection or state of its own; it reads through a
+The model remembers what it has seen. Under `VIAM_MODULE_DATA` (a directory
+viam-server provides to every module, which survives restarts and module
+updates) it keeps a small JSON file keyed by device identity, so each entry
+carries a `first_seen` that survives restarts, and a device that has left
+the bus stays listed with its last `last_seen` instead of vanishing when
+viamboat restarts with an empty history. Product info the bus has not
+repeated since a restart is filled in from the file. The file is written
+only when something changed, atomically. Set `persist` to `false` to turn
+this off; use the `forget` and `reset` commands (below) to drop devices
+that were genuinely removed from the boat.
+
+This model holds no bus connection of its own; it reads through a
 [viamboat](https://github.com/erh/viamboat) `boat-all-pgn` sensor on the same
 machine, which accumulates the bus history. Inventory completeness is
 therefore passive: devices appear once they claim an address or answer
@@ -28,7 +46,8 @@ The following attribute template can be used to configure this model:
 
 ```json
 {
-  "all-pgn-component": <string>
+  "all-pgn-component": <string>,
+  "persist": <boolean>
 }
 ```
 
@@ -36,9 +55,10 @@ The following attribute template can be used to configure this model:
 
 The following attributes are available for this model:
 
-| Name                | Type   | Inclusion | Description                                                                 |
-|---------------------|--------|-----------|-----------------------------------------------------------------------------|
-| `all-pgn-component` | string | Required  | Name of the viamboat `boat-all-pgn` sensor component to read the bus through |
+| Name                | Type    | Inclusion | Description                                                                 |
+|---------------------|---------|-----------|-----------------------------------------------------------------------------|
+| `all-pgn-component` | string  | Required  | Name of the viamboat `boat-all-pgn` sensor component to read the bus through |
+| `persist`           | boolean | Optional  | Default `true`: remember devices in `$VIAM_MODULE_DATA/<component name>-devices.json` so `first_seen` and offline devices survive restarts. Set `false` to report only what the current all-pgn history holds. |
 
 ### Example Configuration
 
@@ -70,6 +90,7 @@ sensor plus this model depending on it:
 ```json
 {
   "Garmin GPSMAP 8612 [1037921]": {
+    "first_seen": "02 Aug 26 16:40 +0000",
     "last_seen": "07 Aug 26 09:12 +0000",
     "src": 3,
     "unique_number": 1037921,
@@ -82,6 +103,7 @@ sensor plus this model depending on it:
     "installation_description_1": "helm"
   },
   "999 CR Box [12345]": {
+    "first_seen": "07 Aug 26 09:10 +0000",
     "last_seen": "07 Aug 26 09:10 +0000",
     "src": 42,
     "unique_number": 12345,
@@ -97,3 +119,31 @@ names ("Garmin"); unknown codes stay numeric. Key labels are sanitized
 (fixed-length model strings are NUL-terminated with junk beyond the
 terminator on some devices), but the `model_id` field keeps the raw decoded
 value. `last_seen` has one-minute resolution.
+
+`last_seen` is the newest timestamp among the device's identity messages and
+its Heartbeat. Devices only send their identity messages at power-up or on
+request, so on their own they would date a live device to the last viamboat
+restart. Devices built to NMEA 2000 v2.0 or later send Heartbeat every 60
+seconds, which keeps `last_seen` current while they are on the bus; older
+devices that send no Heartbeat only move `last_seen` when they re-claim
+their address.
+
+### first_seen
+
+`first_seen` is the earliest bus timestamp the model has for the device:
+on first sight, the oldest timestamp across its entries in the all-pgn
+history (which can predate this component's install if viamboat was
+already running), and from then on the value remembered in the state
+file. It is tied to the device's identity, not its label, so it does not
+restart when product info arrives and the label grows. A source without
+an address claim (`src-<n>`) reports a `first_seen` but is not remembered,
+since a bus address is not an identity.
+
+### DoCommand
+
+| Command | Arguments | Effect |
+|---------|-----------|--------|
+| `{"command": "devices"}` | | Same as Readings. |
+| `{"command": "forget", "device": "<reading key>"}` | or `"identity"` | Drop one remembered device (for example after physically removing it). It reappears, with a new `first_seen`, if it is heard again. |
+| `{"command": "reset"}` | | Forget every remembered device and delete the state file. |
+| `{"command": "status"}` | | Effective settings, state file path, number of remembered devices. |
