@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"go.viam.com/rdk/data"
+	"go.viam.com/rdk/resource"
 	"go.viam.com/test"
 )
 
@@ -98,4 +99,13 @@ func TestCaptureKeyIgnoresNumericShape(t *testing.T) {
 	b := map[string]interface{}{"x [1]": map[string]interface{}{"src": float64(3), "unique_number": float64(1), "first_seen": "b"}}
 	test.That(t, captureKey(a), test.ShouldEqual, captureKey(b))
 	test.That(t, captureKey(a), test.ShouldNotEqual, "")
+}
+
+func TestCaptureChangesOnlyAttributeName(t *testing.T) {
+	// The attribute follows this module's hyphenated naming.
+	cfg, err := resource.TransformAttributeMap[*Config](map[string]interface{}{
+		"all-pgn-component": "all-pgn", "capture-changes-only": true,
+	})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, cfg.CaptureChangesOnly, test.ShouldBeTrue)
 }

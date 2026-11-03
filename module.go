@@ -48,7 +48,7 @@ type Config struct {
 	// CaptureChangesOnly makes data capture store a reading only when the
 	// inventory differs from the last one stored, ignoring first_seen and
 	// last_seen; unchanged captures are skipped. Off by default.
-	CaptureChangesOnly bool `json:"capture_changes_only,omitempty"`
+	CaptureChangesOnly bool `json:"capture-changes-only,omitempty"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -87,7 +87,7 @@ type nmeaDeviceDiscoveryDevicelist struct {
 	state     *persistedState
 	statePath string
 	// capturedKey and capturedAt are the captureKey and time of the last
-	// reading handed to data capture with capture_changes_only on. In
+	// reading handed to data capture with capture-changes-only on. In
 	// memory only, so the first capture after a restart is always stored.
 	capturedKey string
 	capturedAt  time.Time
@@ -247,7 +247,7 @@ func asInt(v interface{}) (int, bool) {
 // first_seen and last_seen let the caller decide what is new or stale.
 //
 // Data capture marks its calls with fromDataManagement. With
-// capture_changes_only it is told to skip (data.ErrNoCaptureToStore, which it
+// capture-changes-only it is told to skip (data.ErrNoCaptureToStore, which it
 // drops without storing or logging) a reading equal to the last one stored;
 // every other caller always gets the reading.
 func (s *nmeaDeviceDiscoveryDevicelist) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {

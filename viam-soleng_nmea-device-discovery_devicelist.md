@@ -17,7 +17,7 @@ The following attribute template can be used to configure this model:
   "all-pgn-component": <string>,
   "persist": <boolean>,
   "sender-component": <string>,
-  "capture_changes_only": <boolean>
+  "capture-changes-only": <boolean>
 }
 ```
 
@@ -30,7 +30,7 @@ The following attributes are available for this model:
 | `all-pgn-component` | string  | Required  | Name of the viamboat `boat-all-pgn` sensor component to read the bus through |
 | `persist`           | boolean | Optional  | Default `true`: remember devices in `$VIAM_MODULE_DATA/<component name>-devices.json` so `first_seen` and offline devices survive restarts. Set `false` to report only what the current all-pgn history holds. |
 | `sender-component`  | string  | Optional  | Name of a viamboat `sender` generic component on the same bus. Required for the `discover` command; without it, `discover` returns an error and everything else works as before. |
-| `capture_changes_only` | boolean | Optional | Default `false`. When `true`, data capture stores a reading only when the inventory differs from the last one stored. See [Data capture](#data-capture). |
+| `capture-changes-only` | boolean | Optional | Default `false`. When `true`, data capture stores a reading only when the inventory differs from the last one stored. Captured `last_seen` values then stop tracking the bus: leave this off if anything judges whether a device is still present from captured `last_seen`. See [Data capture](#data-capture). |
 
 ### Example Configuration
 
@@ -94,9 +94,11 @@ Fields are best-effort per device: only what that device has transmitted on the 
 
 ### Data capture
 
-The inventory rarely changes, but `last_seen` moves every minute while devices send Heartbeat, so data capture at a fixed interval stores a near-identical row each time. With `"capture_changes_only": true` the model compares each capture with the last one it stored and skips it when nothing but `first_seen` and `last_seen` differs, by returning `data.ErrNoCaptureToStore`, which the data manager drops without storing anything or logging an error. A device appearing or being forgotten, a label change (product info arriving), a new source address or any changed identity field is stored. The capture frequency is then only how soon a change reaches the cloud, so it can be set higher than the rate rows would otherwise be wanted at.
+The inventory rarely changes, but `last_seen` moves every minute while devices send Heartbeat, so data capture at a fixed interval stores a near-identical row each time. With `"capture-changes-only": true` the model compares each capture with the last one it stored and skips it when nothing but `first_seen` and `last_seen` differs, by returning `data.ErrNoCaptureToStore`, which the data manager drops without storing anything or logging an error. A device appearing or being forgotten, a label change (product info arriving), a new source address or any changed identity field is stored. The capture frequency is then only how soon a change reaches the cloud, so it can be set higher than the rate rows would otherwise be wanted at.
 
-The first capture after a module restart is always stored. Otherwise the newest stored row can be arbitrarily old while still current, and its `last_seen` values are those of the moment it was stored; use the latest row (Viam's latest tabular data) for the current inventory, not its age. Only data capture is filtered: Readings from any other caller always returns the reading.
+The first capture after a module restart is always stored. Otherwise the newest stored row can be arbitrarily old while still current; use the latest row (Viam's latest tabular data) for the current inventory, not its age.
+
+**Captured `last_seen` is no longer a presence signal.** A stored row's `last_seen` values are those of the moment it was stored, and nothing is stored while a device stays on the bus or after it leaves, since neither changes the inventory. A device last stored at 12:00 that stayed until 18:00 and then left still reads `last_seen` 12:00 in the cloud, with no row recording either fact. If you decide from captured data whether a device is still on the bus, leave `capture-changes-only` off, or read presence live from the sensor (Readings or the `devices` command), whose `last_seen` is always current. Only data capture is filtered: Readings from any other caller always returns the reading.
 
 ### DoCommand
 
@@ -105,7 +107,7 @@ The first capture after a module restart is always stored. Otherwise the newest 
 | `{"command": "devices"}` | | Same as Readings. |
 | `{"command": "forget", "device": "<reading key>"}` | or `"identity"` | Drop one remembered device (for example after physically removing it). It reappears, with a new `first_seen`, if it is heard again. |
 | `{"command": "reset"}` | | Forget every remembered device and delete the state file. |
-| `{"command": "status"}` | | Effective settings: `all_pgn_component`, `sender_component`, `persist`, `persist_path`, `capture_changes_only`, and `remembered_devices`; with `capture_changes_only`, also `last_capture_stored` (RFC 3339, empty until the first). `GetStatus` returns the same map. |
+| `{"command": "status"}` | | Effective settings: `all_pgn_component`, `sender_component`, `persist`, `persist_path`, `capture_changes_only`, and `remembered_devices`; with `capture-changes-only` on, also `last_capture_stored` (RFC 3339, empty until the first). `GetStatus` returns the same map. |
 | `{"command": "discover"}` | optional `"pgns"`: a subset of `[60928, 126996, 126998]` | Ask every device on the bus to announce itself (see below). Needs `sender-component`. Returns `{"requested": [...]}`. |
 
 ### Discovering devices already on the bus
