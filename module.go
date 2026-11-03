@@ -2,6 +2,9 @@ package nmeadevicediscovery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -42,6 +45,10 @@ type Config struct {
 	// With it, the "discover" command broadcasts ISO Requests that make the
 	// devices already on the bus announce themselves again.
 	SenderComponent string `json:"sender-component,omitempty"`
+	// CaptureChangesOnly makes data capture store a reading only when the
+	// inventory differs from the last one stored, ignoring first_seen and
+	// last_seen; unchanged captures are skipped. Off by default.
+	CaptureChangesOnly bool `json:"capture_changes_only,omitempty"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -79,6 +86,11 @@ type nmeaDeviceDiscoveryDevicelist struct {
 	mu        sync.Mutex
 	state     *persistedState
 	statePath string
+	// capturedKey and capturedAt are the captureKey and time of the last
+	// reading handed to data capture with capture_changes_only on. In
+	// memory only, so the first capture after a restart is always stored.
+	capturedKey string
+	capturedAt  time.Time
 
 	// sender is the viamboat sender the "discover" command transmits ISO
 	// Requests through; nil when sender-component is not configured.
@@ -155,6 +167,10 @@ func (s *nmeaDeviceDiscoveryDevicelist) persist() bool {
 	return s.cfg == nil || s.cfg.Persist == nil || *s.cfg.Persist
 }
 
+func (s *nmeaDeviceDiscoveryDevicelist) captureChangesOnly() bool {
+	return s.cfg != nil && s.cfg.CaptureChangesOnly
+}
+
 func (s *nmeaDeviceDiscoveryDevicelist) Name() resource.Name {
 	return s.name
 }
@@ -229,7 +245,13 @@ func asInt(v interface{}) (int, bool) {
 // address: addresses move under contention, and keying by address would
 // report ghost devices at stale addresses. Entries are never pruned;
 // first_seen and last_seen let the caller decide what is new or stale.
+//
+// Data capture marks its calls with fromDataManagement. With
+// capture_changes_only it is told to skip (data.ErrNoCaptureToStore, which it
+// drops without storing or logging) a reading equal to the last one stored;
+// every other caller always gets the reading.
 func (s *nmeaDeviceDiscoveryDevicelist) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
+	fromDM, _ := extra[data.FromDMString].(bool)
 	live, err := s.liveDevices(ctx)
 	if err != nil {
 		return nil, err
@@ -260,12 +282,53 @@ func (s *nmeaDeviceDiscoveryDevicelist) Readings(ctx context.Context, extra map[
 		// An empty map arrives at viam-server as nil, which the sensor server
 		// rejects. Data capture skips ErrNoCaptureToStore quietly; any other
 		// caller gets an error that says what to do.
-		if fromDM, _ := extra[data.FromDMString].(bool); fromDM {
+		if fromDM {
 			return nil, data.ErrNoCaptureToStore
 		}
 		return nil, errNoDevices
 	}
+	if fromDM && s.captureChangesOnly() && !s.noteCapture(captureKey(devices), time.Now()) {
+		return nil, data.ErrNoCaptureToStore
+	}
 	return devices, nil
+}
+
+// noteCapture reports whether a capture with this key should be stored, and
+// if so records it as the last one stored. "" always stores.
+func (s *nmeaDeviceDiscoveryDevicelist) noteCapture(key string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if key != "" && key == s.capturedKey {
+		return false
+	}
+	s.capturedKey, s.capturedAt = key, now
+	return true
+}
+
+// captureKey identifies what a reading says, leaving out first_seen and
+// last_seen: last_seen moves every minute while a device sends Heartbeat,
+// and a claim-less source's first_seen can be "now". A device appearing or
+// being forgotten, a new label, a new address or any identity field changes
+// it. Hashed from JSON (map keys sorted, and an int and the float64 it
+// becomes after a round trip encode alike); "" if it cannot be encoded.
+func captureKey(devices map[string]interface{}) string {
+	stripped := make(map[string]map[string]interface{}, len(devices))
+	for key, v := range devices {
+		dev, _ := v.(map[string]interface{})
+		fields := make(map[string]interface{}, len(dev))
+		for k, val := range dev {
+			if k != "first_seen" && k != "last_seen" {
+				fields[k] = val
+			}
+		}
+		stripped[key] = fields
+	}
+	b, err := json.Marshal(stripped)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // liveDevices filters the all-pgn history down to the identity PGNs (and
@@ -626,13 +689,21 @@ func (s *nmeaDeviceDiscoveryDevicelist) DoCommand(ctx context.Context, cmd map[s
 		if s.cfg != nil {
 			allPgnName = s.cfg.AllPGNComponent
 		}
-		return map[string]interface{}{
-			"all_pgn_component":  allPgnName,
-			"persist":            s.persist(),
-			"persist_path":       s.statePath,
-			"remembered_devices": n,
-			"sender_component":   s.senderName(),
-		}, nil
+		out := map[string]interface{}{
+			"all_pgn_component":    allPgnName,
+			"capture_changes_only": s.captureChangesOnly(),
+			"persist":              s.persist(),
+			"persist_path":         s.statePath,
+			"remembered_devices":   n,
+			"sender_component":     s.senderName(),
+		}
+		if s.captureChangesOnly() {
+			out["last_capture_stored"] = ""
+			if !s.capturedAt.IsZero() {
+				out["last_capture_stored"] = s.capturedAt.UTC().Format(time.RFC3339)
+			}
+		}
+		return out, nil
 	}
 	return nil, fmt.Errorf("unknown command %q", command)
 }

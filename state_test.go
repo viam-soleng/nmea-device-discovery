@@ -260,11 +260,12 @@ func TestStatusMatchesStatusCommand(t *testing.T) {
 	got, err := s.Status(context.Background())
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, got, test.ShouldResemble, map[string]interface{}{
-		"all_pgn_component":  "all-pgn",
-		"persist":            false,
-		"persist_path":       "",
-		"remembered_devices": 0,
-		"sender_component":   "sender",
+		"all_pgn_component":    "all-pgn",
+		"capture_changes_only": false,
+		"persist":              false,
+		"persist_path":         "",
+		"remembered_devices":   0,
+		"sender_component":     "sender",
 	})
 
 	cmd, err := s.DoCommand(context.Background(), map[string]interface{}{"command": "status"})
