@@ -2,9 +2,11 @@ package nmeadevicediscovery
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"go.viam.com/rdk/data"
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/test"
 )
@@ -97,8 +99,49 @@ func TestCaptureKeyIgnoresNumericShape(t *testing.T) {
 	// is the same reading.
 	a := map[string]interface{}{"x [1]": map[string]interface{}{"src": 3, "unique_number": 1, "last_seen": "a"}}
 	b := map[string]interface{}{"x [1]": map[string]interface{}{"src": float64(3), "unique_number": float64(1), "first_seen": "b"}}
-	test.That(t, captureKey(a), test.ShouldEqual, captureKey(b))
-	test.That(t, captureKey(a), test.ShouldNotEqual, "")
+	keyA, errA := captureKey(a)
+	keyB, errB := captureKey(b)
+	test.That(t, errA, test.ShouldBeNil)
+	test.That(t, errB, test.ShouldBeNil)
+	test.That(t, keyA, test.ShouldEqual, keyB)
+	test.That(t, keyA, test.ShouldNotEqual, "")
+}
+
+func TestCaptureKeyFailureStoresEveryCaptureAndSaysSo(t *testing.T) {
+	// One device reports a value encoding/json rejects.
+	nanInfo := func() map[string]interface{} {
+		return entry(126996, 3, "15 Oct 26 12:00 -0400", map[string]interface{}{"Model ID": "GPSMAP 8612", "Load Equivalency": math.NaN()})
+	}
+	fake := &fakeAllPgn{readings: map[string]interface{}{
+		"60928-3":  garminClaim(3, "15 Oct 26 12:00 -0400"),
+		"126996-3": nanInfo(),
+	}}
+	logger, logs := logging.NewObservedTestLogger(t)
+	s := &nmeaDeviceDiscoveryDevicelist{allPgn: fake, logger: logger, cfg: &Config{AllPGNComponent: "all-pgn", CaptureChangesOnly: true}}
+
+	// Every capture is stored, but the warning is logged once.
+	for i := 0; i < 3; i++ {
+		test.That(t, capture(t, s), test.ShouldBeTrue)
+	}
+	test.That(t, logs.FilterMessageSnippet("cannot compute inventory key").Len(), test.ShouldEqual, 1)
+	st, err := s.DoCommand(context.Background(), map[string]interface{}{"command": "status"})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, st["capture_key_error"], test.ShouldContainSubstring, "NaN")
+
+	// The value goes away: the change is stored once, then duplicates are
+	// skipped again, and the recovery is logged.
+	fake.readings["126996-3"] = entry(126996, 3, "15 Oct 26 12:01 -0400", map[string]interface{}{"Model ID": "GPSMAP 8612", "Load Equivalency": float64(1)})
+	test.That(t, capture(t, s), test.ShouldBeTrue)
+	test.That(t, capture(t, s), test.ShouldBeFalse)
+	test.That(t, logs.FilterMessageSnippet("inventory key computed again").Len(), test.ShouldEqual, 1)
+	st, err = s.DoCommand(context.Background(), map[string]interface{}{"command": "status"})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, st, test.ShouldNotContainKey, "capture_key_error")
+
+	// A recurrence warns again.
+	fake.readings["126996-3"] = nanInfo()
+	test.That(t, capture(t, s), test.ShouldBeTrue)
+	test.That(t, logs.FilterMessageSnippet("cannot compute inventory key").Len(), test.ShouldEqual, 2)
 }
 
 func TestCaptureChangesOnlyAttributeName(t *testing.T) {

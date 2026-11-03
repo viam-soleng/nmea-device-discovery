@@ -88,9 +88,12 @@ type nmeaDeviceDiscoveryDevicelist struct {
 	statePath string
 	// capturedKey and capturedAt are the captureKey and time of the last
 	// reading handed to data capture with capture-changes-only on. In
-	// memory only, so the first capture after a restart is always stored.
-	capturedKey string
-	capturedAt  time.Time
+	// memory only, so the first capture after a restart or a config change
+	// (AlwaysRebuild builds a new instance) is always stored. captureKeyErr
+	// is why the latest key could not be computed, nil when it could.
+	capturedKey   string
+	capturedAt    time.Time
+	captureKeyErr error
 
 	// sender is the viamboat sender the "discover" command transmits ISO
 	// Requests through; nil when sender-component is not configured.
@@ -287,18 +290,31 @@ func (s *nmeaDeviceDiscoveryDevicelist) Readings(ctx context.Context, extra map[
 		}
 		return nil, errNoDevices
 	}
-	if fromDM && s.captureChangesOnly() && !s.noteCapture(captureKey(devices), time.Now()) {
-		return nil, data.ErrNoCaptureToStore
+	if fromDM && s.captureChangesOnly() {
+		key, keyErr := captureKey(devices)
+		if !s.noteCapture(key, keyErr, time.Now()) {
+			return nil, data.ErrNoCaptureToStore
+		}
 	}
 	return devices, nil
 }
 
 // noteCapture reports whether a capture with this key should be stored, and
-// if so records it as the last one stored. "" always stores.
-func (s *nmeaDeviceDiscoveryDevicelist) noteCapture(key string, now time.Time) bool {
+// if so records it as the last one stored. A key that could not be computed
+// stores every capture, since storing a duplicate beats dropping a change;
+// the failure is logged once when it starts and once when it clears, so a
+// persistently bad field does not flood the logs, and status reports it.
+func (s *nmeaDeviceDiscoveryDevicelist) noteCapture(key string, keyErr error, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if key != "" && key == s.capturedKey {
+	switch {
+	case keyErr != nil && s.captureKeyErr == nil:
+		s.logger.Warnw("capture-changes-only: cannot compute inventory key; storing every capture", "error", keyErr)
+	case keyErr == nil && s.captureKeyErr != nil:
+		s.logger.Info("capture-changes-only: inventory key computed again; storing only changes")
+	}
+	s.captureKeyErr = keyErr
+	if keyErr == nil && key == s.capturedKey {
 		return false
 	}
 	s.capturedKey, s.capturedAt = key, now
@@ -310,8 +326,9 @@ func (s *nmeaDeviceDiscoveryDevicelist) noteCapture(key string, now time.Time) b
 // and a claim-less source's first_seen can be "now". A device appearing or
 // being forgotten, a new label, a new address or any identity field changes
 // it. Hashed from JSON (map keys sorted, and an int and the float64 it
-// becomes after a round trip encode alike); "" if it cannot be encoded.
-func captureKey(devices map[string]interface{}) string {
+// becomes after a round trip encode alike). It fails when a field is not
+// JSON-encodable, such as a decoded float64 NaN or ±Inf.
+func captureKey(devices map[string]interface{}) (string, error) {
 	stripped := make(map[string]map[string]interface{}, len(devices))
 	for key, v := range devices {
 		dev, _ := v.(map[string]interface{})
@@ -325,10 +342,10 @@ func captureKey(devices map[string]interface{}) string {
 	}
 	b, err := json.Marshal(stripped)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // liveDevices filters the all-pgn history down to the identity PGNs (and
@@ -701,6 +718,9 @@ func (s *nmeaDeviceDiscoveryDevicelist) DoCommand(ctx context.Context, cmd map[s
 			out["last_capture_stored"] = ""
 			if !s.capturedAt.IsZero() {
 				out["last_capture_stored"] = s.capturedAt.UTC().Format(time.RFC3339)
+			}
+			if s.captureKeyErr != nil {
+				out["capture_key_error"] = s.captureKeyErr.Error()
 			}
 		}
 		return out, nil
